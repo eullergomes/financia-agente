@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, List
 
 from dotenv import load_dotenv, find_dotenv
-from groq import Groq
+from groq import Groq, BadRequestError
 
 from . import tools
 
@@ -32,6 +32,11 @@ Datas:
 - "hoje" = data de hoje.
 - "ontem", "mês passado" etc. podem ser interpretados aproximadamente.
 Se não tiver certeza das datas, use a data de hoje.
+
+Regras estritas para ferramentas de período:
+- Para tool_get_top_category e tool_get_summary: passe month e year como INTEIROS simples ou omita. Exemplo: {"month": 11, "year": 2025}.
+- Nunca use objetos, funções ou estruturas como {"function": "get_current_month"}. Resolva você mesmo.
+- "este mês" = mês atual, "este ano" = ano atual.
 """
 
 TOOLS_SCHEMA: List[Dict[str, Any]] = [
@@ -132,8 +137,15 @@ def run_agent(user_message: str) -> AgentResponse:
         {"role": "user", "content": user_message},
     ]
 
-    # 1ª chamada: deixa o modelo decidir se precisa de tool
-    resp = call_llm(messages, tools=TOOLS_SCHEMA, tool_choice="auto")
+    # 1ª chamada: deixa o modelo decidir se precisa de tool (retry se erro de schema)
+    try:
+        resp = call_llm(messages, tools=TOOLS_SCHEMA, tool_choice="auto")
+    except BadRequestError as e:
+        if "tool_get_top_category" in str(e) or "tool_get_summary" in str(e):
+            messages.insert(1, {"role": "system", "content": "Lembrete: use inteiros simples para month/year sem objetos."})
+            resp = call_llm(messages, tools=TOOLS_SCHEMA, tool_choice="auto")
+        else:
+            return AgentResponse(text=f"Falha ao processar requisição: {e}")
     msg = resp.choices[0].message
 
     # Se o modelo decidiu usar alguma ferramenta
